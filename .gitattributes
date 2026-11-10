@@ -1,0 +1,14 @@
+# SCM syntax highlighting & preventing 3-way merges
+pixi.lock merge=binary linguist-language=YAML linguist-generated=true -diff
+
+# 1. Force ALL text files to use LF everywhere (Windows and CI)
+* text eol=lf
+
+# 2. (Optional) Explicitly mark common binary files so Git never touches them
+# *.png binary
+# *.gif binary
+# *.pdf binary
+
+# 3. (Optional) The ONLY exception where you might want CRLF
+# Windows batch files will fail on Windows if they don't have CRLF
+# *.bat text eol=crlf

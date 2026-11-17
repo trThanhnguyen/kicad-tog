@@ -88,3 +88,15 @@ def test_helpers_skip_empty_lists():
 
     assert child(node, "width") == ["width", "0.8"]
     assert children(node, "width") == [["width", "0.8"]]
+
+@pytest.mark.parametrize("bad, msg", [
+    ("(a (b)",   "Unclosed"),
+    ("(a))",     "Unexpected closing"),
+    ("",         "Empty"),
+    ('(a "b)',   "Unterminated"),
+    ("(a)(b)",   "Multiple root"),
+    ("abc",      "Atom outside"),
+])
+def test_parse_rejects_bad_input(bad, msg):
+    with pytest.raises(ValueError, match=msg):
+        parse(bad)

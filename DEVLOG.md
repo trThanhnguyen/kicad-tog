@@ -18,3 +18,6 @@ Line ending: forced text line ending = LF
 
 ### 2026-11-18
 - Craft 3 KiCad fixture boards for the checker (known answers).
+- Create tests for board loader (`tests\test_board.py`), specify what a board loader must provide
+- Provide corresponding `src\kicad_tog\board.py` - conversion from S-expressions to board data structures
+- Create tests for the checking part and implementation - the main geometry algorithms 

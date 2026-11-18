@@ -1,35 +1,5 @@
-"""Tests for board.py: the only module that knows KiCad's file layout.
-
-The API these tests ask for (you write it):
-
-    @dataclass(frozen=True)
-    class Segment:
-        start: tuple[float, float]
-        end: tuple[float, float]
-        width: float
-        layer: str
-        net: str
-
-        @classmethod
-        def from_sexpr(cls, node: list) -> "Segment": ...
-
-    def dielectric_height(stackup: list, layer_a: str, layer_b: str) -> float: ...
-
-    @dataclass(frozen=True)
-    class Board:
-        segments: list[Segment]
-        fills: dict[tuple[str, str], MultiPolygon]   # (net, layer) -> filled copper
-        stackup: list                                # the raw (stackup ...) node
-
-        @classmethod
-        def from_sexpr(cls, tree: list) -> "Board": ...
-
-        @classmethod
-        def load(cls, path) -> "Board": ...          # read file -> parse -> from_sexpr
-
-        def h(self, signal_layer: str, ref_layer: str) -> float: ...
-
-Fixture facts used below were measured from the saved fills on 2026-11-18.
+"""Tests for board.py:
+(load → select nets → trace geometry → fill union → …)
 """
 
 from dataclasses import FrozenInstanceError

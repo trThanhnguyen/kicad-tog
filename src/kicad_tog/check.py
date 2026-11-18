@@ -5,14 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from shapely.geometry import LineString, Point
-from shapely.ops import linemerge
+from shapely.ops import linemerge, unary_union
 
 from .board import Board
 
-# Numerical-noise cutoff and the maximum uncovered length attributed to a pad.
+# EPS: distance below which a span "touches" a trace end (float noise).
+# MIN_SPAN: spans shorter than this are slivers, dropped (mm).
+# PAD_CLEARANCE_MAX: an end span shorter than this is pad clearance, not an
+# overhang (mm). Fixture pin spans are 1.75 = pad radius 0.85 + zone
+# clearance 0.5 + r 0.4; 2.5 leaves room for slightly bigger pads.
 EPS = 1e-6
-MIN_SPAN = 0.01
-PAD_CLEARANCE_MAX = 2.0
+MIN_SPAN = 0.05
+PAD_CLEARANCE_MAX = 2.5
 
 
 @dataclass(frozen=True)
@@ -95,7 +99,7 @@ def classify(
     if not touches_start and not touches_end:
         return ("split", "error")
 
-    if span.length <= PAD_CLEARANCE_MAX:
+    if span.length < PAD_CLEARANCE_MAX:
         return ("pad_clearance", "info")
 
     return ("edge_overhang", "warning")
@@ -107,10 +111,19 @@ def check(
     ref_layer: str,
     k: float = 3.0,
 ) -> list[Violation]:
-    """Check selected nets against GND copper on ``ref_layer``."""
-    copper = board.fills.get(("GND", ref_layer))
-    if copper is None or copper.is_empty:
+    """Check selected nets against all filled copper on ``ref_layer``.
+
+    Every net's fill on the reference layer counts (GND or a power plane):
+    a gap between two pours is still a gap, so it shows up as a split.
+    """
+    pours = [
+        fill
+        for (_net, layer), fill in board.fills.items()
+        if layer == ref_layer and not fill.is_empty
+    ]
+    if not pours:
         raise ValueError(f"No reference copper found on layer {ref_layer!r}")
+    copper = unary_union(pours)
 
     selected_nets = set(nets)
     violations: list[Violation] = []

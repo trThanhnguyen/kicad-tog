@@ -6,10 +6,10 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
-from shapely.geometry import LineString, Point, box
+from shapely.geometry import LineString, MultiPolygon, Point, box
 from shapely.ops import unary_union
 
-from kicad_tog.board import Board
+from kicad_tog.board import Board, Segment
 from kicad_tog.check import (
     MIN_SPAN,
     PAD_CLEARANCE_MAX,
@@ -18,6 +18,7 @@ from kicad_tog.check import (
     classify,
     uncovered_spans,
 )
+from kicad_tog.s_expression import parse
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -182,3 +183,36 @@ def test_violation_is_frozen(boards):
 
     with pytest.raises(FrozenInstanceError):
         v.length = 0.0
+
+
+# ---- reference copper = every fill on ref_layer, whatever its net ----
+
+STACKUP_2L = """(stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "prepreg") (thickness 0.1))
+    (layer "In1.Cu" (type "copper") (thickness 0.035)))"""
+
+SIG = Segment((2.0, 0.0), (18.0, 0.0), 0.2, "F.Cu", "SIG")  # r = 0.1 + 3 * 0.1 = 0.4
+
+
+def board_with(fills):
+    return Board(segments=[SIG], fills=fills, stackup=parse(STACKUP_2L))
+
+
+def test_power_plane_is_a_valid_reference():
+    board = board_with({("3V3", "In1.Cu"): MultiPolygon([box(0, -5, 20, 5)])})
+
+    assert check(board, ["SIG"], "In1.Cu") == []
+
+
+def test_gap_between_two_pours_is_a_split():
+    # GND left, 3V3 right, 0.5 mm apart: only the gap (+ r each side) is uncovered
+    board = board_with({
+        ("GND", "In1.Cu"): MultiPolygon([box(0, -5, 9.75, 5)]),
+        ("3V3", "In1.Cu"): MultiPolygon([box(10.25, -5, 20, 5)]),
+    })
+    (split,) = check(board, ["SIG"], "In1.Cu")
+
+    assert split.kind == "split"
+    assert split.start == pytest.approx((9.35, 0.0), abs=0.01)
+    assert split.end == pytest.approx((10.65, 0.0), abs=0.01)

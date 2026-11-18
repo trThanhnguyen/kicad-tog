@@ -21,3 +21,4 @@ Line ending: forced text line ending = LF
 - Create tests for board loader (`tests\test_board.py`), specify what a board loader must provide
 - Provide corresponding `src\kicad_tog\board.py` - conversion from S-expressions to board data structures
 - Create tests for the checking part and implementation - the main geometry algorithms 
+- Fix: reference copper = every net's fill on ref_layer; constants back to MIN_SPAN 0.05, PAD_CLEARANCE_MAX 2.5

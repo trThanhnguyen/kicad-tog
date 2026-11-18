@@ -3,3 +3,10 @@
 !.pixi/config.toml
 
 __pycache__/
+
+# from kicad
+*.lck
+.history/
+*.kicad_prl
+*-backups/
+fp-info-cache

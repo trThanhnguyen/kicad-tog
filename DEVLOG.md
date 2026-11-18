@@ -15,3 +15,6 @@ Line ending: forced text line ending = LF
 - Parses pic_programmer (KiCad 10, 0.6 MB) in 0.2 s and Jetson Thor (KiCad 9, 85 MB) in 29.5 s.
   Per-character loop; a regex tokenizer is the fix if Jetson is needed in P7.
 - KiCad 9 writes (net 1) plus a net table; KiCad 10 writes (net "VCC"). Handle it in board.py.
+
+### 2026-11-18
+- Craft 3 KiCad fixture boards for the checker (known answers).

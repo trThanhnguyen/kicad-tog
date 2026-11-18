@@ -68,9 +68,23 @@ breaks, not **how much** that hurts: it gives no impedance, reflection or EMI nu
 
 ## Validation
 
-- Five fixture boards with known answers: `continuous`, `split_crossed`, `near_split`,
-  `edge_overhang` and `pair_one_member`. Native KiCad DRC passes all five; kicad-tog
-  must flag exactly the bad ones.
+- Fixture boards with known answers, in `fixtures/`. Native KiCad DRC passes all of
+  them (0 errors, 0 warnings); kicad-tog must flag exactly the bad ones.
+
+  All fixtures are the same 30 × 20 mm KiCad 10 board: two 2-pin headers (J1, J2) joined
+  by one 0.2 mm trace, net `SIG`, on F.Cu. The stackup is KiCad's default 4 layers
+  (F.Cu / In1.Cu / In2.Cu / B.Cu, 1.6 mm), and the reference plane is the GND zone on
+  In1.Cu. So h = 0.1 mm (dielectric 1 only; copper thickness never counts) and
+  k·h = 0.3 mm.
+
+  | Fixture | GND plane under `SIG` | Expected result |
+  |---|---|---|
+  | `continuous` | Solid under the whole trace | 0 violations, exit 0 |
+  | `split_crossed` | Slotted: an 8 mm × 1 mm slot crosses under the trace; the plane stays one piece | 1 split crossing (error), exit 1 |
+  | `edge_overhang` | Cut short: the plane ends about 13 mm before J2 (J2's ground reaches J1 through a B.Cu trace) | 1 edge overhang (warning), exit 0 |
+
+  Planned next: `near_split` (the plane edge runs alongside the trace, closer than k·h)
+  and `pair_one_member` (only one trace of a differential pair crosses a gap).
 - The tests run in pytest, on every push, in GitHub Actions and GitLab CI.
 - A real board: the Raspberry Pi RP2040 minimal design (USB D+/D− over GND).
 

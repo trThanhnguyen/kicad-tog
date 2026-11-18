@@ -28,8 +28,8 @@ SEGMENT = """(segment (start 113 88) (end 139.185 88) (width 0.2)
     (layer "F.Cu") (net "SIG") (uuid "b4a57a80"))"""
 
 
-def test_segment_from_sexpr_reads_numbers_as_floats():
-    seg = Segment.from_sexpr(parse(SEGMENT))
+def test_segment_from_s_expression_reads_numbers_as_floats():
+    seg = Segment.from_s_expression(parse(SEGMENT))
 
     assert seg.start == (113.0, 88.0)
     assert seg.end == (139.185, 88.0)
@@ -40,7 +40,7 @@ def test_segment_from_sexpr_reads_numbers_as_floats():
 
 
 def test_segment_is_frozen():
-    seg = Segment.from_sexpr(parse(SEGMENT))
+    seg = Segment.from_s_expression(parse(SEGMENT))
 
     with pytest.raises(FrozenInstanceError):
         seg.width = 0.3
@@ -104,7 +104,7 @@ def test_h_unknown_layer_raises():
         dielectric_height(parse(STACKUP_4L), "F.Cu", "In3.Cu")
 
 
-# ---- Board.from_sexpr: small hand-made boards ----
+# ---- Board.from_s_expression: small hand-made boards ----
 
 def test_zone_without_fill_adds_nothing():
     # a rule area (keepout) has no net and no filled_polygon
@@ -112,7 +112,7 @@ def test_zone_without_fill_adds_nothing():
         (zone (layer "In1.Cu") (keepout (copperpour not_allowed))
               (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1)))))""")
 
-    assert Board.from_sexpr(tree).fills == {}
+    assert Board.from_s_expression(tree).fills == {}
 
 
 def test_fill_layer_comes_from_filled_polygon_not_zone():
@@ -121,7 +121,7 @@ def test_fill_layer_comes_from_filled_polygon_not_zone():
         (zone (net "GND") (layers "In1.Cu" "B.Cu")
             (filled_polygon (layer "In1.Cu") (pts (xy 0 0) (xy 2 0) (xy 2 2) (xy 0 2)))
             (filled_polygon (layer "B.Cu") (pts (xy 0 0) (xy 1 0) (xy 1 1) (xy 0 1)))))""")
-    fills = Board.from_sexpr(tree).fills
+    fills = Board.from_s_expression(tree).fills
 
     assert fills[("GND", "In1.Cu")].area == pytest.approx(4.0)
     assert fills[("GND", "B.Cu")].area == pytest.approx(1.0)
@@ -188,7 +188,7 @@ def test_kicad9_net_numbers_resolve_to_names():
         (segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net 2))
         (zone (net 1) (net_name "GND") (layer "In1.Cu")
             (filled_polygon (layer "In1.Cu") (pts (xy 0 0) (xy 1 0) (xy 1 1)))))""")
-    board = Board.from_sexpr(tree)
+    board = Board.from_s_expression(tree)
 
     assert board.segments[0].net == "SIG"
     assert ("GND", "In1.Cu") in board.fills

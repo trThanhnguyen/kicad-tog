@@ -1,0 +1,54 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs pixi, then the env from the committed pixi.lock (--locked by default).
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.63.2
+
+      - name: Unit tests
+        run: pixi run test
+
+      - name: Make output folder
+        run: mkdir -p out
+
+      # Warnings and info never fail the run, so both boards must exit exactly 0.
+      - name: "Demo: clean boards pass (exit 0)"
+        run: |
+          pixi run tog fixtures/continuous.kicad_pcb --nets SIG --ref In1.Cu \
+            --json out/continuous.json --png out/continuous.png
+          pixi run tog fixtures/edge_overhang.kicad_pcb --nets SIG --ref In1.Cu \
+            --json out/edge_overhang.json --png out/edge_overhang.png
+
+      # Known-bad board: must exit exactly 1. A crash (exit 2) must NOT count as "found the split".
+      - name: "Demo: split board is caught (exit 1)"
+        run: |
+          set +e
+          pixi run tog fixtures/split_crossed.kicad_pcb --nets SIG --ref In1.Cu \
+            --json out/split_crossed.json --png out/split_crossed.png
+          code=$?
+          set -e
+          echo "kicad-tog exit code: $code"
+          if [ "$code" -ne 1 ]; then
+            echo "::error::expected exit 1 (split found), got $code"
+            exit 1
+          fi
+
+      # always(): upload even when a step above failed; that's when the picture matters.
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kicad-tog-reports
+          path: out/
+          if-no-files-found: warn

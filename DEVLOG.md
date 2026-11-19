@@ -22,3 +22,7 @@ Line ending: forced text line ending = LF
 - Provide corresponding `src\kicad_tog\board.py` - conversion from S-expressions to board data structures
 - Create tests for the checking part and implementation - the main geometry algorithms 
 - Fix: reference copper = every net's fill on ref_layer; constants back to MIN_SPAN 0.05, PAD_CLEARANCE_MAX 2.5
+
+### 2026-11-19
+- P5 report.py: text, JSON and PNG output. The figure tests read pixels, because a label box was hiding the very span it labelled.
+- cli.py: exit codes 0/1/2. A misspelled net is an error (exit 2), not a pass.

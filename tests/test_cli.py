@@ -242,3 +242,63 @@ def test_python_dash_m(name, code):
     )
     assert result.returncode == code
     assert result.stdout.startswith("Board: ")
+
+
+# --- --layer: check one signal layer -----------------------------------------
+
+
+def test_layer_defaults_to_every_layer():
+    assert build_parser().parse_args(["b", "--nets", "SIG", "--ref", "In1.Cu"]).layer is None
+
+
+def test_layer_reaches_the_check_and_the_header(capsys):
+    assert run("split_crossed", "--layer", "F.Cu") == 1
+    out = capsys.readouterr().out
+    assert "Signal layer: F.Cu" in out
+    assert "ERROR split net=SIG layer=F.Cu 1.80 mm" in out
+
+
+def test_layer_filters_out_other_layers(capsys):
+    # edge_overhang: SIG on F.Cu, GND on B.Cu. Only F.Cu is checked.
+    main([board_path("edge_overhang"), "--nets", "SIG,GND", "--ref", "In1.Cu", "--layer", "F.Cu"])
+    out = capsys.readouterr().out
+    assert "layer=B.Cu" not in out
+    assert "layer=F.Cu" in out
+
+
+def test_layer_with_no_segments_is_an_error_not_a_pass(capsys):
+    # Like a misspelled net: nothing would be checked, and CI would go green.
+    assert run("split_crossed", "--layer", "B.Cu") == 2
+    assert_clean_error(capsys, "B.Cu", "no segments")
+
+
+def test_layer_in_the_json(tmp_path, capsys):
+    out_file = tmp_path / "r.json"
+    run("split_crossed", "--layer", "F.Cu", "--json", str(out_file))
+    assert json.loads(out_file.read_text(encoding="utf-8"))["signal_layer"] == "F.Cu"
+
+
+# --- a KiCad 9 board: nets are numbers + a top-level table ---------------------
+
+KICAD9_BOARD = """(kicad_pcb (version 20241229) (generator "pcbnew")
+  (setup (stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "prepreg") (thickness 0.1))
+    (layer "In1.Cu" (type "copper") (thickness 0.035))))
+  (net 0 "") (net 1 "GND") (net 2 "/USB_D_P")
+  (segment (start 2 0) (end 18 0) (width 0.2) (layer "F.Cu") (net 2))
+  (zone (net 1) (net_name "GND") (layer "In1.Cu")
+    (filled_polygon (layer "In1.Cu") (pts (xy 0 -5) (xy 9 -5) (xy 9 5) (xy 0 5))))
+  (zone (net 1) (net_name "GND") (layer "In1.Cu")
+    (filled_polygon (layer "In1.Cu") (pts (xy 11 -5) (xy 20 -5) (xy 20 5) (xy 11 5)))))
+"""
+
+
+def test_kicad9_board_is_checked_by_net_name(tmp_path, capsys):
+    board = tmp_path / "kicad9.kicad_pcb"
+    board.write_text(KICAD9_BOARD, encoding="utf-8")
+
+    code = main([str(board), "--nets", "/USB_D_P", "--ref", "In1.Cu", "--layer", "F.Cu"])
+
+    assert code == 1
+    assert "ERROR split net=/USB_D_P layer=F.Cu" in capsys.readouterr().out

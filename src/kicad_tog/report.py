@@ -63,11 +63,21 @@ def _point(point: tuple[float, float]) -> list[float]:
     return [round(point[0], 4), round(point[1], 4)]
 
 
-def _header(*, board_name: str, ref_layer: str, nets: Iterable[str], k: float) -> str:
-    return (
+def _header(
+    *,
+    board_name: str,
+    ref_layer: str,
+    nets: Iterable[str],
+    k: float,
+    signal_layer: str | None = None,
+) -> str:
+    header = (
         f"Board: {board_name} | Reference layer: {ref_layer} | "
         f"Nets: {', '.join(sorted(nets))} | k: {k:g}"
     )
+    if signal_layer is not None:
+        header += f" | Signal layer: {signal_layer}"
+    return header
 
 
 def to_text(
@@ -77,9 +87,18 @@ def to_text(
     ref_layer: str,
     nets: Iterable[str],
     k: float,
+    signal_layer: str | None = None,
 ) -> str:
     items = list(violations)
-    lines = [_header(board_name=board_name, ref_layer=ref_layer, nets=nets, k=k)]
+    lines = [
+        _header(
+            board_name=board_name,
+            ref_layer=ref_layer,
+            nets=nets,
+            k=k,
+            signal_layer=signal_layer,
+        )
+    ]
     if not items:
         lines.append("No violations")
     for item in ordered(items):
@@ -100,11 +119,13 @@ def to_dict(
     ref_layer: str,
     nets: Iterable[str],
     k: float,
+    signal_layer: str | None = None,
 ) -> dict[str, Any]:
     items = list(violations)
     return {
         "board": board_name,
         "ref_layer": ref_layer,
+        "signal_layer": signal_layer,  # null: every layer was checked
         "nets": sorted(nets),
         "k": round(k, 4),
         "summary": summarize(items),
@@ -131,6 +152,7 @@ def to_json(
     ref_layer: str,
     nets: Iterable[str],
     k: float,
+    signal_layer: str | None = None,
 ) -> str:
     return json.dumps(
         to_dict(
@@ -139,6 +161,7 @@ def to_json(
             ref_layer=ref_layer,
             nets=nets,
             k=k,
+            signal_layer=signal_layer,
         ),
         indent=2,
     ) + "\n"
@@ -150,6 +173,7 @@ def plot(
     *,
     nets: Iterable[str],
     ref_layer: str,
+    signal_layer: str | None = None,
 ) -> Figure:
     """Plot checked traces, reference-layer copper, and violation spans."""
     items = ordered(violations)
@@ -171,7 +195,12 @@ def plot(
                     zorder=1,
                 )
 
-    traces = [segment for segment in board.segments if segment.net in checked_nets]
+    traces = [
+        segment
+        for segment in board.segments
+        if segment.net in checked_nets
+        and (signal_layer is None or segment.layer == signal_layer)
+    ]
     for segment in traces:
         ax.plot(
             [segment.start[0], segment.end[0]],

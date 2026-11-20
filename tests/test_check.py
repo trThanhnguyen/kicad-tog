@@ -13,6 +13,7 @@ from kicad_tog.board import Board, Segment
 from kicad_tog.check import (
     MIN_SPAN,
     PAD_CLEARANCE_MAX,
+    LocalCopper,
     Violation,
     check,
     classify,
@@ -216,3 +217,103 @@ def test_gap_between_two_pours_is_a_split():
     assert split.kind == "split"
     assert split.start == pytest.approx((9.35, 0.0), abs=0.01)
     assert split.end == pytest.approx((10.65, 0.0), abs=0.01)
+
+
+# ---- signal_layer: only segments on one layer (real boards change layers) ----
+
+STACKUP_3L = """(stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "prepreg") (thickness 0.1))
+    (layer "In1.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 2" (type "core") (thickness 0.2))
+    (layer "In2.Cu" (type "copper") (thickness 0.035)))"""
+
+# The same net crosses the 9..11 slot twice: on F.Cu and, after a via, on In2.Cu.
+TWO_LAYER_NET = Board(
+    segments=[
+        Segment((2.0, 0.0), (18.0, 0.0), 0.2, "F.Cu", "SIG"),
+        Segment((2.0, 3.0), (18.0, 3.0), 0.2, "In2.Cu", "SIG"),
+    ],
+    fills={("GND", "In1.Cu"): MultiPolygon([box(0, -5, 9, 8), box(11, -5, 20, 8)])},
+    stackup=parse(STACKUP_3L),
+)
+
+
+def test_without_signal_layer_every_layer_is_checked():
+    layers = {v.layer for v in check(TWO_LAYER_NET, ["SIG"], "In1.Cu")}
+
+    assert layers == {"F.Cu", "In2.Cu"}
+
+
+def test_signal_layer_keeps_only_that_layer():
+    result = check(TWO_LAYER_NET, ["SIG"], "In1.Cu", signal_layer="F.Cu")
+
+    assert [(v.layer, v.kind) for v in result] == [("F.Cu", "split")]
+
+
+def test_signal_layer_with_no_segments_finds_nothing():
+    assert check(TWO_LAYER_NET, ["SIG"], "In1.Cu", signal_layer="B.Cu") == []
+
+
+def test_signal_layer_equal_to_ref_layer_raises():
+    with pytest.raises(ValueError, match="In1.Cu"):
+        check(TWO_LAYER_NET, ["SIG"], "In1.Cu", signal_layer="In1.Cu")
+
+
+# ---- LocalCopper: per-trace clipping must not change any answer ----
+
+def perforated_plane():
+    """A 40 x 40 plane with a slot, an edge notch and a grid of via-sized holes."""
+    plane = box(0, 0, 40, 40)
+    holes = [Point(x + 0.5, y + 0.5).buffer(0.3) for x in range(2, 38, 3) for y in range(2, 38, 3)]
+    cuts = unary_union([*holes, box(19.5, 5, 20.5, 35), box(0, 18, 4, 22)])
+    return plane.difference(cuts)
+
+
+# Straight, diagonal, short, long, and one running off the plane edge.
+TRACES = [
+    LineString([(1, 10), (39, 10)]),
+    LineString([(5, 5), (35, 33)]),
+    LineString([(10, 30), (12, 30.4)]),
+    LineString([(2, 20), (8, 20)]),
+    LineString([(30, 1), (30, 39)]),
+    LineString([(25, 25), (45, 25)]),
+]
+
+
+@pytest.mark.parametrize("trace", TRACES, ids=range(len(TRACES)))
+@pytest.mark.parametrize("radius", [0.1, 0.4, 1.5])
+def test_local_copper_gives_the_same_spans_as_the_whole_plane(trace, radius):
+    plane = perforated_plane()
+    local = LocalCopper(plane).near(trace, radius)
+
+    full = uncovered_spans(trace, plane, radius)
+    clipped = uncovered_spans(trace, local, radius)
+
+    assert len(clipped) == len(full)
+    for a, b in zip(clipped, full):
+        assert a.length == pytest.approx(b.length, abs=1e-6)
+        assert a.coords[0] == pytest.approx(b.coords[0], abs=1e-6)
+        assert a.coords[-1] == pytest.approx(b.coords[-1], abs=1e-6)
+
+
+def test_local_copper_keeps_only_nearby_pours():
+    far = box(100, 100, 110, 110)
+    near = box(0, -5, 20, 5)
+    local = LocalCopper(MultiPolygon([near, far])).near(TRACE, 0.5)
+
+    assert local.bounds == pytest.approx((1.0, -1.0, 19.0, 1.0))   # window = trace +- 2r
+    assert not local.intersects(far)
+
+
+def test_local_copper_accepts_a_single_polygon():
+    local = LocalCopper(box(0, -5, 20, 5)).near(TRACE, 0.5)
+
+    assert local.area == pytest.approx(18.0 * 2.0)
+
+
+def test_local_copper_with_nothing_nearby_is_empty():
+    local = LocalCopper(box(100, 100, 110, 110)).near(TRACE, 0.5)
+
+    assert local.is_empty
+    assert len(uncovered_spans(TRACE, local, 0.5)) == 1   # the whole trace is uncovered

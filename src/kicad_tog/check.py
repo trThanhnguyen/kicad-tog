@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from shapely.geometry import LineString, Point
+from shapely import STRtree
+from shapely.geometry import LineString, MultiPolygon, Point, box
 from shapely.ops import linemerge, unary_union
 
 from .board import Board
@@ -105,17 +106,52 @@ def classify(
     return ("edge_overhang", "warning")
 
 
+class LocalCopper:
+    """Hand each trace only the reference copper near it.
+
+    Eroding the whole board's copper once per segment is what makes a real
+    board slow (~0.4 s per segment on the 6-layer CM5 demo board). The copper
+    is split into its polygons once and indexed in an STRtree; each trace gets
+    the polygons that touch its window, clipped to that window.
+
+    The clip cannot change the answer. Erosion distributes over intersection:
+    erode(A & W) = erode(A) & erode(W). With a margin of 2r around the trace,
+    every trace point stays inside erode(W), so on the trace the clipped and
+    the full copper give the same spans.
+    """
+
+    def __init__(self, copper) -> None:
+        self.parts = list(getattr(copper, "geoms", [copper]))
+        self.tree = STRtree(self.parts)
+
+    def near(self, trace: LineString, radius: float) -> MultiPolygon:
+        min_x, min_y, max_x, max_y = trace.bounds
+        margin = 2.0 * radius
+        window = box(min_x - margin, min_y - margin, max_x + margin, max_y + margin)
+        nearby = [self.parts[i] for i in self.tree.query(window)]
+        return MultiPolygon(nearby).intersection(window)
+
+
 def check(
     board: Board,
     nets: list[str] | set[str] | tuple[str, ...],
     ref_layer: str,
     k: float = 3.0,
+    signal_layer: str | None = None,
 ) -> list[Violation]:
     """Check selected nets against all filled copper on ``ref_layer``.
 
     Every net's fill on the reference layer counts (GND or a power plane):
     a gap between two pours is still a gap, so it shows up as a split.
+
+    ``signal_layer`` keeps only segments on that layer. On a real board a net
+    changes layers through vias, and its segment on In5.Cu says nothing about
+    the plane on In1.Cu. ``None`` checks every layer, which is fine for the
+    single-layer fixtures.
     """
+    if signal_layer is not None and signal_layer == ref_layer:
+        raise ValueError(f"signal layer and reference layer are both {ref_layer}")
+
     pours = [
         fill
         for (_net, layer), fill in board.fills.items()
@@ -123,7 +159,7 @@ def check(
     ]
     if not pours:
         raise ValueError(f"No reference copper found on layer {ref_layer!r}")
-    copper = unary_union(pours)
+    copper = LocalCopper(unary_union(pours))
 
     selected_nets = set(nets)
     violations: list[Violation] = []
@@ -131,12 +167,15 @@ def check(
     for segment in board.segments:
         if segment.net not in selected_nets:
             continue
+        if signal_layer is not None and segment.layer != signal_layer:
+            continue
 
         height = board.h(segment.layer, ref_layer)
         radius = segment.width / 2.0 + k * height
         trace = LineString([segment.start, segment.end])
 
-        for uncovered in uncovered_spans(trace, copper, radius):
+        local = copper.near(trace, radius)
+        for uncovered in uncovered_spans(trace, local, radius):
             classification = classify(uncovered, trace)
             if classification is None:
                 continue

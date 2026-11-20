@@ -438,3 +438,45 @@ def test_plot_saves_a_png(boards, results, tmp_path):
     fig_for(boards, results, "split_crossed").savefig(path, dpi=100)
 
     assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# ---- signal_layer: shown in the header and JSON, filters the plotted traces ----
+
+def test_text_header_names_the_signal_layer_when_given():
+    text = to_text([], board_name="b", ref_layer="In1.Cu", nets=["SIG"], k=3.0, signal_layer="F.Cu")
+
+    assert text.splitlines()[0].endswith("| Signal layer: F.Cu")
+
+
+def test_text_header_has_no_signal_layer_by_default():
+    text = to_text([], board_name="b", ref_layer="In1.Cu", nets=["SIG"], k=3.0)
+
+    assert "Signal layer" not in text
+
+
+def test_dict_signal_layer_is_null_by_default_and_set_when_given():
+    default = to_dict([], board_name="b", ref_layer="In1.Cu", nets=["SIG"], k=3.0)
+    given = to_dict([], board_name="b", ref_layer="In1.Cu", nets=["SIG"], k=3.0, signal_layer="F.Cu")
+
+    assert default["signal_layer"] is None
+    assert given["signal_layer"] == "F.Cu"
+    assert json.loads(
+        to_json([], board_name="b", ref_layer="In1.Cu", nets=["SIG"], k=3.0, signal_layer="F.Cu")
+    ) == given
+
+
+def test_plot_draws_only_traces_on_the_signal_layer():
+    board = Board(
+        segments=[
+            Segment((2.0, 0.0), (18.0, 0.0), 0.2, "F.Cu", "SIG"),
+            Segment((2.0, 3.0), (18.0, 3.0), 0.2, "B.Cu", "SIG"),
+        ],
+        fills={("GND", "In1.Cu"): MultiPolygon([box(0, -5, 20, 5)])},
+        stackup=parse(STACKUP_2L),
+    )
+    every = plot(board, [], nets=["SIG"], ref_layer="In1.Cu").axes[0]
+    front = plot(board, [], nets=["SIG"], ref_layer="In1.Cu", signal_layer="F.Cu").axes[0]
+
+    assert len(lines_with(every, "trace")) == 2
+    (trace,) = lines_with(front, "trace")
+    assert trace.get_ydata() == pytest.approx([0.0, 0.0])

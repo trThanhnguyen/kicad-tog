@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nets", required=True, type=_nets, help="comma-separated net names")
     parser.add_argument("--ref", required=True, help="reference copper layer")
     parser.add_argument(
+        "--layer",
+        help="check only segments on this signal layer (needed on real boards, "
+        "where nets change layers through vias; default: every layer)",
+    )
+    parser.add_argument(
         "-k", "--k", type=_positive_float, default=3.0,
         help="return-current margin factor (default: 3.0)",
     )
@@ -57,8 +62,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if unknown_nets:
             raise ValueError(f"unknown net(s): {', '.join(unknown_nets)}")
 
-        # check() raises ValueError when the reference layer has no copper.
-        violations = check(board, args.nets, args.ref, k=args.k)
+        # Same reason as unknown nets: a wrong layer would check nothing and pass.
+        if args.layer is not None and not any(
+            segment.net in args.nets and segment.layer == args.layer
+            for segment in board.segments
+        ):
+            raise ValueError(f"no segments of {', '.join(args.nets)} on {args.layer}")
+
+        # check() raises ValueError when the reference layer has no copper,
+        # or when the signal layer is the reference layer.
+        violations = check(board, args.nets, args.ref, k=args.k, signal_layer=args.layer)
 
         # The same header fields go into the text and the JSON report.
         meta = {
@@ -66,6 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ref_layer": args.ref,
             "nets": args.nets,
             "k": args.k,
+            "signal_layer": args.layer,
         }
         report = to_text(violations, **meta)
 
@@ -73,7 +87,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.json.write_text(to_json(violations, **meta), encoding="utf-8")
 
         if args.png is not None:
-            figure = plot(board, violations, nets=args.nets, ref_layer=args.ref)
+            figure = plot(
+                board, violations, nets=args.nets, ref_layer=args.ref, signal_layer=args.layer
+            )
             figure.savefig(args.png, dpi=150, bbox_inches="tight")
 
     except (OSError, ValueError) as exc:

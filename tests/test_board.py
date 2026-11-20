@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from shapely.geometry import MultiPolygon, Point
 
-from kicad_tog.board import Board, Segment, dielectric_height
+from kicad_tog.board import Board, Segment, dielectric_height, net_table
 from kicad_tog.s_expression import parse
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -179,9 +179,24 @@ def test_edge_overhang_plane_stops_at_126(boards):
     assert not gnd.contains(Point(130, 88))
 
 
-# ---- later: KiCad 9 net table (P7, Jetson Thor demo) ----
+# ---- KiCad 9 net table: numbers on segments/zones, names at the top ----
+# KiCad 9 files (e.g. the cm5_minima and Jetson Thor demos) write (net 1 "GND")
+# once at the top, then (net 1) everywhere else. KiCad 10 writes (net "GND").
 
-@pytest.mark.skip(reason="P7: KiCad 9 writes nets as numbers + a top-level net table")
+def test_net_table_reads_number_name_pairs():
+    tree = parse('(kicad_pcb (net 0 "") (net 1 "GND") (net 2 "/USB_C.D_P"))')
+
+    assert net_table(tree) == {"0": "", "1": "GND", "2": "/USB_C.D_P"}
+
+
+def test_kicad10_board_has_no_net_table():
+    # KiCad 10 has no top-level (net ...) nodes; segment nets are children
+    tree = parse('(kicad_pcb (segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net "SIG")))')
+
+    assert net_table(tree) == {}
+    assert Board.from_s_expression(tree).segments[0].net == "SIG"
+
+
 def test_kicad9_net_numbers_resolve_to_names():
     tree = parse("""(kicad_pcb
         (net 0 "") (net 1 "GND") (net 2 "SIG")
@@ -192,3 +207,36 @@ def test_kicad9_net_numbers_resolve_to_names():
 
     assert board.segments[0].net == "SIG"
     assert ("GND", "In1.Cu") in board.fills
+
+
+def test_fixture_nets_are_names(boards):
+    # The fixtures are KiCad 10 files: no table, names pass through
+    assert {s.net for s in boards["edge_overhang"].segments} == {"SIG", "GND"}
+
+
+# ---- fills with holes: KiCad's keyhole outline must become a valid polygon ----
+# KiCad writes a hole into the outline itself: 10 x 10 square, the ring runs
+# from the left edge to a 2 x 2 hole (clockwise), around it, and back along
+# the same zero-width bridge. As a plain Polygon that ring is invalid.
+
+KEYHOLE_ZONE = """(kicad_pcb
+    (zone (net "GND") (layer "In1.Cu")
+        (filled_polygon (layer "In1.Cu") (pts
+            (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10) (xy 0 5)
+            (xy 4 5) (xy 4 6) (xy 6 6) (xy 6 4) (xy 4 4) (xy 4 5)
+            (xy 0 5)))))"""
+
+
+def test_keyhole_fill_is_valid_with_a_real_hole():
+    fill = Board.from_s_expression(parse(KEYHOLE_ZONE)).fills[("GND", "In1.Cu")]
+
+    assert fill.is_valid
+    assert fill.area == pytest.approx(96.0)          # 100 minus the 2 x 2 hole
+    assert not fill.covers(Point(5, 5))              # the hole is empty
+    assert fill.covers(Point(2, 5))                  # the bridge is not a slot
+
+
+def test_fixture_fills_are_valid(boards):
+    for board in boards.values():
+        for fill in board.fills.values():
+            assert fill.is_valid

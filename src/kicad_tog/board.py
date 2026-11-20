@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from shapely import make_valid
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
@@ -48,8 +49,14 @@ class Segment:
     net: str
 
     @classmethod
-    def from_s_expression(cls, node: list) -> "Segment":
-        """Build one Segment from a KiCad ``(segment ...)`` node."""
+    def from_s_expression(
+        cls, node: list, net_names: dict[str, str] | None = None
+    ) -> "Segment":
+        """Build one Segment from a KiCad ``(segment ...)`` node.
+
+        ``net_names`` maps KiCad 9 net numbers to names (see ``net_table``).
+        KiCad 10 writes the name itself, which is then used as is.
+        """
         start_node = _required_child(node, "start")
         end_node = _required_child(node, "end")
         width_node = _required_child(node, "width")
@@ -62,8 +69,30 @@ class Segment:
             end=(float(end_node[1]), float(end_node[2])),
             width=float(width_node[1]),
             layer=layer_node[1],
-            net=net_node[1],
+            net=_net_name(net_node, net_names),
         )
+
+
+def net_table(tree: list) -> dict[str, str]:
+    """Map net numbers to names from a KiCad 9 top-level net table.
+
+    KiCad 9 writes ``(net 1 "GND")`` once at the top and then ``(net 1)`` on
+    every segment and zone. KiCad 10 writes ``(net "GND")`` everywhere and has
+    no table, so the result is empty and names pass through unchanged.
+    """
+    return {
+        node[1]: node[2]
+        for node in children(tree, "net")
+        if len(node) > 2
+    }
+
+
+def _net_name(net_node: list, net_names: dict[str, str] | None) -> str:
+    """Resolve a ``(net ...)`` atom: a KiCad 9 number or a KiCad 10 name."""
+    value = net_node[1]
+    if net_names:
+        return net_names.get(value, value)
+    return value
 
 
 def dielectric_height(stackup: list, layer_a: str, layer_b: str) -> float:
@@ -110,8 +139,9 @@ class Board:
     @classmethod
     def from_s_expression(cls, tree: list) -> "Board":
         """Extract tracks, filled zone copper, and stackup from a board tree."""
+        net_names = net_table(tree)
         segments = [
-            Segment.from_s_expression(segment_node)
+            Segment.from_s_expression(segment_node, net_names)
             for segment_node in children(tree, "segment")
         ]
 
@@ -128,7 +158,7 @@ class Board:
             net_node = child(zone, "net")
             if net_node is None:
                 continue
-            net = net_node[1]
+            net = _net_name(net_node, net_names)
 
             for filled_polygon in filled_polygons:
                 # The zone may cover several layers. Each filled_polygon names
@@ -140,9 +170,12 @@ class Board:
                     for xy_node in children(points_node, "xy")
                 ]
 
-                # KiCad's filled_polygon is already a simple outline: holes are
-                # represented by the outline itself, so Polygon(points) is enough.
-                polygon = Polygon(points)
+                # KiCad writes holes into the outline itself: the ring runs into
+                # each hole and back along a zero-width bridge. That ring touches
+                # itself, so the Polygon is invalid, and Shapely's results on
+                # invalid input are unreliable (false splits on real boards).
+                # make_valid turns it into proper polygons with holes.
+                polygon = make_valid(Polygon(points))
                 if not polygon.is_empty:
                     polygons_by_net_layer[(net, layer_node[1])].append(polygon)
 

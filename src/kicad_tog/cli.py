@@ -9,7 +9,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .board import Board
-from .check import check
+from .check import check, reference_map
+from .project import select_nets
 from .report import failed, plot, to_json, to_text
 
 
@@ -36,8 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="Check signal traces for gaps in their reference plane.",
     )
     parser.add_argument("board", type=Path, help="input KiCad PCB file")
-    parser.add_argument("--nets", required=True, type=_nets, help="comma-separated net names")
-    parser.add_argument("--ref", required=True, help="reference copper layer")
+    parser.add_argument(
+        "--nets", type=_nets,
+        help="comma-separated net names or wildcards like '/*PCIE*' (default: nets in "
+        "non-Default net classes of the .kicad_pro, else differential-pair names)",
+    )
+    parser.add_argument(
+        "--ref",
+        help="reference copper layer (default: for each trace, the nearest plane layer "
+        "above and below it; a plane = fills covering >= 50%% of the board)",
+    )
     parser.add_argument(
         "--layer",
         help="check only segments on this signal layer (needed on real boards, "
@@ -48,8 +57,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="return-current margin factor (default: 3.0)",
     )
     parser.add_argument("--json", type=Path, help="write a JSON report")
-    parser.add_argument("--png", type=Path, help="write a plot as PNG")
+    parser.add_argument(
+        "--png", type=Path,
+        help="write a plot as PNG (automatic references: one file per plane, "
+        "out.png -> out_In1.Cu.png, ...)",
+    )
     return parser
+
+
+def plane_png(path: Path, plane: str) -> Path:
+    """out.png + In1.Cu -> out_In1.Cu.png"""
+    return path.with_name(f"{path.stem}_{plane}{path.suffix}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -58,28 +76,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         board = Board.load(args.board)
 
-        unknown_nets = sorted(set(args.nets) - {segment.net for segment in board.segments})
-        if unknown_nets:
-            raise ValueError(f"unknown net(s): {', '.join(unknown_nets)}")
+        # --nets, else the project's net classes, else pair names; raises
+        # ValueError on an unknown net or when nothing is selected.
+        nets, nets_reason = select_nets(
+            {segment.net for segment in board.segments},
+            args.nets,
+            args.board.with_suffix(".kicad_pro"),
+        )
 
         # Same reason as unknown nets: a wrong layer would check nothing and pass.
         if args.layer is not None and not any(
-            segment.net in args.nets and segment.layer == args.layer
+            segment.net in nets and segment.layer == args.layer
             for segment in board.segments
         ):
-            raise ValueError(f"no segments of {', '.join(args.nets)} on {args.layer}")
+            raise ValueError(f"no segments of {', '.join(nets)} on {args.layer}")
 
         # check() raises ValueError when the reference layer has no copper,
-        # or when the signal layer is the reference layer.
-        violations = check(board, args.nets, args.ref, k=args.k, signal_layer=args.layer)
+        # when the signal layer is the reference layer, or (auto) when the
+        # board has no stackup.
+        violations = check(board, nets, args.ref, k=args.k, signal_layer=args.layer)
+
+        # Automatic references: plane -> the signal layers that use it.
+        planes = {} if args.ref is not None else reference_map(board, nets, args.layer)
 
         # The same header fields go into the text and the JSON report.
         meta = {
             "board_name": args.board.name,  # file name only: same output on every machine
             "ref_layer": args.ref,
-            "nets": args.nets,
+            "nets": nets,
             "k": args.k,
             "signal_layer": args.layer,
+            "planes": list(planes),
+            "nets_reason": nets_reason,
         }
         report = to_text(violations, **meta)
 
@@ -87,10 +115,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.json.write_text(to_json(violations, **meta), encoding="utf-8")
 
         if args.png is not None:
-            figure = plot(
-                board, violations, nets=args.nets, ref_layer=args.ref, signal_layer=args.layer
-            )
-            figure.savefig(args.png, dpi=150, bbox_inches="tight")
+            if args.ref is not None:
+                figure = plot(
+                    board, violations, nets=nets, ref_layer=args.ref, signal_layer=args.layer
+                )
+                figure.savefig(args.png, dpi=150, bbox_inches="tight")
+            for plane, layers in planes.items():
+                figure = plot(
+                    board,
+                    [v for v in violations if v.ref_layer == plane],
+                    nets=nets,
+                    ref_layer=plane,
+                    signal_layer=args.layer,
+                    trace_layers=layers,
+                )
+                figure.savefig(plane_png(args.png, plane), dpi=150, bbox_inches="tight")
 
     except (OSError, ValueError) as exc:
         # Bad input, not a failed check: exit 2, one line, no traceback.

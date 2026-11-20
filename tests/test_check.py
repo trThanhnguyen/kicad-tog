@@ -14,9 +14,13 @@ from kicad_tog.check import (
     MIN_SPAN,
     PAD_CLEARANCE_MAX,
     LocalCopper,
+    Reference,
     Violation,
     check,
     classify,
+    plane_layers,
+    reference_map,
+    references,
     uncovered_spans,
 )
 from kicad_tog.s_expression import parse
@@ -317,3 +321,146 @@ def test_local_copper_with_nothing_nearby_is_empty():
 
     assert local.is_empty
     assert len(uncovered_spans(TRACE, local, 0.5)) == 1   # the whole trace is uncovered
+
+
+# ---- automatic references: planes by coverage, nearest above / below ----
+
+# Six copper layers; h between neighbours: 0.1, 0.2, 0.3, 0.2, 0.1.
+STACKUP_6L = """(stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "d1" (type "prepreg") (thickness 0.1))
+    (layer "In1.Cu" (type "copper") (thickness 0.035))
+    (layer "d2" (type "core") (thickness 0.2))
+    (layer "In2.Cu" (type "copper") (thickness 0.035))
+    (layer "d3" (type "prepreg") (thickness 0.3))
+    (layer "In3.Cu" (type "copper") (thickness 0.035))
+    (layer "d4" (type "core") (thickness 0.2))
+    (layer "In4.Cu" (type "copper") (thickness 0.035))
+    (layer "d5" (type "prepreg") (thickness 0.1))
+    (layer "B.Cu" (type "copper") (thickness 0.035)))"""
+
+OUTLINE = (0.0, -5.0, 20.0, 5.0)              # 200 mm²
+FULL = MultiPolygon([box(0, -5, 20, 5)])      # 100 %
+SLOTTED = MultiPolygon([box(0, -5, 9, 5), box(11, -5, 20, 5)])  # 90 %, slot x 9..11
+SMALL = MultiPolygon([box(0, -5, 8, 5)])      # 40 %: not a plane
+
+
+def six_layer(segments, fills):
+    return Board(segments=segments, fills=fills, stackup=parse(STACKUP_6L), outline=OUTLINE)
+
+
+def seg(layer, net="SIG"):
+    return Segment((2.0, 0.0), (18.0, 0.0), 0.2, layer, net)
+
+
+def test_a_plane_covers_at_least_half_the_board():
+    board = six_layer([], {
+        ("GND", "In1.Cu"): FULL,
+        ("GND", "In2.Cu"): SMALL,
+        ("3V3", "In3.Cu"): MultiPolygon([box(0, -5, 9, 5)]),   # two nets, 45 % + 45 %:
+        ("1V8", "In3.Cu"): MultiPolygon([box(11, -5, 20, 5)]),  # a split power plane
+    })
+
+    assert plane_layers(board) == ["In1.Cu", "In3.Cu"]
+
+
+def test_outer_layer_has_one_reference():
+    board = six_layer([], {("GND", "In1.Cu"): FULL, ("GND", "In4.Cu"): FULL})
+
+    assert references(board, "F.Cu", plane_layers(board)) == [
+        Reference("In1.Cu", pytest.approx(0.1), nearest=True)
+    ]
+
+
+def test_inner_layer_has_a_nearest_and_a_farther_plane():
+    # In2 sits between In1 (h 0.2) and In3 (h 0.3)
+    board = six_layer([], {("GND", "In1.Cu"): FULL, ("GND", "In3.Cu"): FULL})
+    refs = {r.layer: r for r in references(board, "In2.Cu", plane_layers(board))}
+
+    assert refs["In1.Cu"].nearest and refs["In1.Cu"].h == pytest.approx(0.2)
+    assert not refs["In3.Cu"].nearest and refs["In3.Cu"].h == pytest.approx(0.3)
+
+
+def test_planes_within_10_percent_are_both_nearest():
+    # In3 sits between In2 (h 0.3) and In4 (h 0.2): 0.3 > 1.1 * 0.2, not a tie;
+    # In3.Cu with planes on In2 (0.3) and B.Cu (0.2 + 0.1 = 0.3): a tie.
+    board = six_layer([], {("GND", "In2.Cu"): FULL, ("GND", "B.Cu"): FULL})
+    refs = references(board, "In3.Cu", plane_layers(board))
+
+    assert [(r.layer, r.nearest) for r in refs] == [("In2.Cu", True), ("B.Cu", True)]
+
+
+def test_only_the_nearest_plane_on_each_side_counts():
+    board = six_layer([], {
+        ("GND", "In1.Cu"): FULL, ("GND", "In2.Cu"): FULL, ("GND", "In4.Cu"): FULL,
+    })
+
+    assert [r.layer for r in references(board, "F.Cu", plane_layers(board))] == ["In1.Cu"]
+
+
+def test_the_traces_own_layer_is_never_its_reference():
+    # B.Cu is a full GND flood and also carries the trace
+    board = six_layer([], {("GND", "B.Cu"): FULL, ("GND", "In4.Cu"): FULL})
+
+    assert [r.layer for r in references(board, "B.Cu", plane_layers(board))] == ["In4.Cu"]
+
+
+def test_gap_in_the_nearest_plane_is_an_error():
+    board = six_layer([seg("In2.Cu")], {("GND", "In1.Cu"): SLOTTED, ("GND", "In3.Cu"): FULL})
+    (split,) = check(board, ["SIG"])
+
+    assert (split.kind, split.severity, split.ref_layer) == ("split", "error", "In1.Cu")
+    # r = 0.1 + 3 * 0.2 = 0.7 around the 2 mm slot
+    assert split.length == pytest.approx(2.0 + 2 * 0.7, abs=0.01)
+
+
+def test_gap_in_the_farther_plane_is_a_warning():
+    board = six_layer([seg("In2.Cu")], {("GND", "In1.Cu"): FULL, ("GND", "In3.Cu"): SLOTTED})
+    (split,) = check(board, ["SIG"])
+
+    assert (split.kind, split.severity, split.ref_layer) == ("split", "warning", "In3.Cu")
+
+
+def test_gap_in_either_tied_plane_is_an_error():
+    board = six_layer([seg("In3.Cu")], {("GND", "In2.Cu"): FULL, ("GND", "B.Cu"): SLOTTED})
+    (split,) = check(board, ["SIG"])
+
+    assert (split.severity, split.ref_layer) == ("error", "B.Cu")
+
+
+def test_trace_with_no_plane_is_one_no_reference_error():
+    board = six_layer([seg("F.Cu")], {("GND", "In1.Cu"): SMALL})
+    (item,) = check(board, ["SIG"])
+
+    assert (item.kind, item.severity, item.ref_layer) == ("no_reference", "error", None)
+    assert item.length == pytest.approx(16.0)
+
+
+def test_auto_on_split_crossed_matches_the_given_reference(boards):
+    """In1.Cu covers ~86 % of the fixture, so auto picks it and gets the same spans."""
+    given = check(boards["split_crossed"], ["SIG"], "In1.Cu")
+    auto = check(boards["split_crossed"], ["SIG"])
+
+    assert auto == given
+    assert {v.ref_layer for v in auto} == {"In1.Cu"}
+
+
+def test_given_reference_is_recorded_on_each_violation(boards):
+    assert {v.ref_layer for v in check(boards["split_crossed"], ["SIG"], "In1.Cu")} == {"In1.Cu"}
+
+
+def test_auto_without_stackup_raises():
+    board = Board(segments=[SIG], fills={("GND", "In1.Cu"): FULL}, stackup=[], outline=OUTLINE)
+
+    with pytest.raises(ValueError, match="stackup"):
+        check(board, ["SIG"])
+
+
+def test_reference_map_lists_planes_and_their_signal_layers():
+    board = six_layer(
+        [seg("F.Cu"), seg("In2.Cu"), seg("B.Cu", net="OTHER")],
+        {("GND", "In1.Cu"): FULL, ("GND", "In3.Cu"): FULL, ("GND", "In4.Cu"): FULL},
+    )
+
+    assert reference_map(board, ["SIG"]) == {"In1.Cu": ["F.Cu", "In2.Cu"], "In3.Cu": ["In2.Cu"]}
+    assert reference_map(board, ["SIG"], signal_layer="F.Cu") == {"In1.Cu": ["F.Cu"]}

@@ -19,6 +19,15 @@ EPS = 1e-6
 MIN_SPAN = 0.05
 PAD_CLEARANCE_MAX = 2.5
 
+# A copper layer is a plane when its fills (every net) cover at least this
+# share of the board area. Net names don't matter: a split power layer is
+# still a plane, and the gaps between its islands are what we look for.
+PLANE_COVERAGE = 0.5
+# Two planes are "equally near" when the farther h is within 10 % of the nearer.
+TIE_TOLERANCE = 0.10
+# A gap in the farther plane counts one level lower than in the nearest plane.
+_FARTHER = {"error": "warning", "warning": "info", "info": "info"}
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -29,6 +38,14 @@ class Violation:
     start: tuple[float, float]
     end: tuple[float, float]
     length: float
+    ref_layer: str | None = None  # None only for "no_reference"
+
+
+@dataclass(frozen=True)
+class Reference:
+    layer: str
+    h: float
+    nearest: bool
 
 
 def _line_parts(geometry) -> list[LineString]:
@@ -132,65 +149,174 @@ class LocalCopper:
         return MultiPolygon(nearby).intersection(window)
 
 
-def check(
-    board: Board,
-    nets: list[str] | set[str] | tuple[str, ...],
-    ref_layer: str,
-    k: float = 3.0,
-    signal_layer: str | None = None,
-) -> list[Violation]:
-    """Check selected nets against all filled copper on ``ref_layer``.
-
-    Every net's fill on the reference layer counts (GND or a power plane):
-    a gap between two pours is still a gap, so it shows up as a split.
-
-    ``signal_layer`` keeps only segments on that layer. On a real board a net
-    changes layers through vias, and its segment on In5.Cu says nothing about
-    the plane on In1.Cu. ``None`` checks every layer, which is fine for the
-    single-layer fixtures.
-    """
-    if signal_layer is not None and signal_layer == ref_layer:
-        raise ValueError(f"signal layer and reference layer are both {ref_layer}")
-
+def _layer_copper(board: Board, layer: str):
+    """Union of every net's fill on one layer (empty if there is none)."""
     pours = [
         fill
-        for (_net, layer), fill in board.fills.items()
-        if layer == ref_layer and not fill.is_empty
+        for (_net, fill_layer), fill in board.fills.items()
+        if fill_layer == layer and not fill.is_empty
     ]
-    if not pours:
-        raise ValueError(f"No reference copper found on layer {ref_layer!r}")
-    copper = LocalCopper(unary_union(pours))
+    return unary_union(pours) if pours else None
 
+
+def plane_layers(board: Board) -> list[str]:
+    """Copper layers, in stackup order, whose fills cover >= 50 % of the board."""
+    area = board.area()
+    if area <= 0:
+        return []
+    planes = []
+    for layer in board.copper_layers():
+        copper = _layer_copper(board, layer)
+        if copper is not None and copper.area >= PLANE_COVERAGE * area:
+            planes.append(layer)
+    return planes
+
+
+def references(board: Board, signal_layer: str, planes: list[str]) -> list[Reference]:
+    """The nearest plane above and the nearest below ``signal_layer``.
+
+    Never the signal layer itself: a flood beside a trace is not under it.
+    One plane is the nearest (a gap there is an error), the other the farther
+    one (a gap counts one level lower), unless their h are within 10 %, when
+    both are nearest. An outer layer has at most one side, so one reference.
+    """
+    order = board.copper_layers()
+    if signal_layer not in order:
+        raise ValueError(f"Layer {signal_layer!r} is not in the stackup")
+    index = order.index(signal_layer)
+
+    above = [layer for layer in order[:index] if layer in planes]
+    below = [layer for layer in order[index + 1 :] if layer in planes]
+    candidates = ([above[-1]] if above else []) + ([below[0]] if below else [])
+
+    heights = {layer: board.h(signal_layer, layer) for layer in candidates}
+    if not heights:
+        return []
+    nearest_h = min(heights.values())
+    return [
+        Reference(layer, h, nearest=h <= nearest_h * (1.0 + TIE_TOLERANCE))
+        for layer, h in heights.items()
+    ]
+
+
+def _selected(board: Board, nets, signal_layer: str | None):
     selected_nets = set(nets)
-    violations: list[Violation] = []
-
     for segment in board.segments:
         if segment.net not in selected_nets:
             continue
         if signal_layer is not None and segment.layer != signal_layer:
             continue
+        yield segment
 
-        height = board.h(segment.layer, ref_layer)
-        radius = segment.width / 2.0 + k * height
+
+def reference_map(
+    board: Board,
+    nets,
+    signal_layer: str | None = None,
+) -> dict[str, list[str]]:
+    """Plane -> the signal layers that use it, for the checked segments.
+
+    Planes come in stackup order. The CLI uses it for the report header and
+    for one figure per plane.
+    """
+    planes = plane_layers(board)
+    used: dict[str, list[str]] = {}
+    for layer in sorted({s.layer for s in _selected(board, nets, signal_layer)}):
+        for reference in references(board, layer, planes):
+            used.setdefault(reference.layer, []).append(layer)
+    order = board.copper_layers()
+    return {plane: used[plane] for plane in order if plane in used}
+
+
+def _check_piece(segment, trace, copper, radius, ref_layer, nearest):
+    for uncovered in uncovered_spans(trace, copper.near(trace, radius), radius):
+        classification = classify(uncovered, trace)
+        if classification is None:
+            continue
+        kind, severity = classification
+        yield Violation(
+            net=segment.net,
+            layer=segment.layer,
+            kind=kind,
+            severity=severity if nearest else _FARTHER[severity],
+            start=tuple(uncovered.coords[0]),
+            end=tuple(uncovered.coords[-1]),
+            length=uncovered.length,
+            ref_layer=ref_layer,
+        )
+
+
+def check(
+    board: Board,
+    nets: list[str] | set[str] | tuple[str, ...],
+    ref_layer: str | None = None,
+    k: float = 3.0,
+    signal_layer: str | None = None,
+) -> list[Violation]:
+    """Check selected nets against their reference plane(s).
+
+    ``ref_layer`` given: every checked segment is compared with all filled
+    copper on that layer (GND or a power plane; a gap between two pours is
+    still a gap, so it shows up as a split).
+
+    ``ref_layer`` None (auto): each segment is compared with the nearest plane
+    above and below its own layer (see ``references``). A segment with no plane
+    on either side is one ``no_reference`` error.
+
+    ``signal_layer`` keeps only segments on that layer. On a real board a net
+    changes layers through vias, and its segment on In5.Cu says nothing about
+    the plane on In1.Cu.
+    """
+    if ref_layer is not None and signal_layer == ref_layer:
+        raise ValueError(f"signal layer and reference layer are both {ref_layer}")
+
+    violations: list[Violation] = []
+
+    if ref_layer is not None:
+        copper = _layer_copper(board, ref_layer)
+        if copper is None:
+            raise ValueError(f"No reference copper found on layer {ref_layer!r}")
+        local = LocalCopper(copper)
+        for segment in _selected(board, nets, signal_layer):
+            radius = segment.width / 2.0 + k * board.h(segment.layer, ref_layer)
+            trace = LineString([segment.start, segment.end])
+            violations += _check_piece(segment, trace, local, radius, ref_layer, True)
+        return violations
+
+    if not board.copper_layers():
+        raise ValueError("the board has no stackup, so the dielectric height is unknown")
+
+    planes = plane_layers(board)
+    refs_by_layer: dict[str, list[Reference]] = {}
+    copper_by_plane: dict[str, LocalCopper] = {}
+
+    for segment in _selected(board, nets, signal_layer):
+        if segment.layer not in refs_by_layer:
+            refs_by_layer[segment.layer] = references(board, segment.layer, planes)
         trace = LineString([segment.start, segment.end])
 
-        local = copper.near(trace, radius)
-        for uncovered in uncovered_spans(trace, local, radius):
-            classification = classify(uncovered, trace)
-            if classification is None:
-                continue
-
-            kind, severity = classification
+        refs = refs_by_layer[segment.layer]
+        if not refs:
             violations.append(
                 Violation(
                     net=segment.net,
                     layer=segment.layer,
-                    kind=kind,
-                    severity=severity,
-                    start=tuple(uncovered.coords[0]),
-                    end=tuple(uncovered.coords[-1]),
-                    length=uncovered.length,
+                    kind="no_reference",
+                    severity="error",
+                    start=segment.start,
+                    end=segment.end,
+                    length=trace.length,
+                    ref_layer=None,
                 )
+            )
+            continue
+
+        for ref in refs:
+            if ref.layer not in copper_by_plane:
+                copper_by_plane[ref.layer] = LocalCopper(_layer_copper(board, ref.layer))
+            radius = segment.width / 2.0 + k * ref.h
+            violations += _check_piece(
+                segment, trace, copper_by_plane[ref.layer], radius, ref.layer, ref.nearest
             )
 
     return violations

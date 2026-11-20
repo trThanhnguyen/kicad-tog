@@ -66,8 +66,6 @@ def test_k_is_a_float():
 @pytest.mark.parametrize(
     "argv",
     [
-        ["b.kicad_pcb", "--ref", "In1.Cu"],  # no --nets
-        ["b.kicad_pcb", "--nets", "SIG"],  # no --ref
         ["--nets", "SIG", "--ref", "In1.Cu"],  # no board
         ["b.kicad_pcb", "--nets", "SIG", "--ref", "In1.Cu", "--k", "abc"],
         ["b.kicad_pcb", "--nets", "SIG", "--ref", "In1.Cu", "--k", "-1"],
@@ -302,3 +300,65 @@ def test_kicad9_board_is_checked_by_net_name(tmp_path, capsys):
 
     assert code == 1
     assert "ERROR split net=/USB_D_P layer=F.Cu" in capsys.readouterr().out
+
+
+# --- automatic references and net selection ----------------------------------
+
+
+def test_ref_and_nets_are_optional():
+    args = build_parser().parse_args(["b.kicad_pcb"])
+    assert args.ref is None and args.nets is None
+
+
+@pytest.mark.parametrize(("name", "code"), [("continuous", 0), ("split_crossed", 1)])
+def test_auto_reference_on_the_fixtures(name, code, capsys):
+    assert main([board_path(name), "--nets", "SIG"]) == code
+    out = capsys.readouterr().out
+    assert "Reference layer: auto (In1.Cu)" in out
+    assert "ref=In1.Cu" in out
+
+
+def test_half_plane_is_not_a_plane(capsys):
+    # edge_overhang's In1 pour covers 44 % of the board: no plane, so the trace
+    # has no reference at all (with --ref In1.Cu it is an overhang warning).
+    assert main([board_path("edge_overhang"), "--nets", "SIG"]) == 1
+    assert "ERROR no_reference net=SIG" in capsys.readouterr().out
+
+
+def test_fixtures_have_no_net_classes_so_no_flags_exits_2(capsys):
+    assert main([board_path("split_crossed")]) == 2
+    assert_clean_error(capsys, "no nets selected")
+
+
+def test_auto_png_is_one_file_per_plane(tmp_path):
+    out = tmp_path / "out.png"
+    main([board_path("split_crossed"), "--nets", "SIG", "--png", str(out)])
+
+    assert [p.name for p in tmp_path.iterdir()] == ["out_In1.Cu.png"]
+
+
+def test_auto_json_names_the_planes_and_the_reference_per_violation(tmp_path, capsys):
+    out = tmp_path / "r.json"
+    main([board_path("split_crossed"), "--nets", "SIG", "--json", str(out)])
+    data = json.loads(out.read_text(encoding="utf-8"))
+
+    assert data["ref_layer"] is None
+    assert data["reference_planes"] == ["In1.Cu"]
+    assert {v["ref_layer"] for v in data["violations"]} == {"In1.Cu"}
+
+
+def test_net_classes_from_the_project_file(tmp_path, capsys):
+    # A copy of split_crossed whose project puts SIG in a 50ohm class: no flags needed.
+    board = tmp_path / "board.kicad_pcb"
+    board.write_text(Path(board_path("split_crossed")).read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "board.kicad_pro").write_text(json.dumps({"net_settings": {
+        "netclass_patterns": [{"pattern": "SIG", "netclass": "50ohm"}],
+    }}), encoding="utf-8")
+
+    assert main([str(board)]) == 1
+    assert "Nets: 1 (net classes: 50ohm: 1)" in capsys.readouterr().out
+
+
+def test_wildcard_nets_on_the_command_line(capsys):
+    assert main([board_path("split_crossed"), "--nets", "S*", "--ref", "In1.Cu"]) == 1
+    assert "net=SIG" in capsys.readouterr().out

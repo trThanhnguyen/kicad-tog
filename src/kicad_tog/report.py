@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from matplotlib.figure import Figure
@@ -20,6 +20,7 @@ COLORS: dict[str, str] = {
     "split": "#d62728",
     "edge_overhang": "#e69f00",
     "pad_clearance": "#0072b2",
+    "no_reference": "#7b3294",
 }
 
 _SEVERITY_ORDER = {severity: index for index, severity in enumerate(SEVERITIES)}
@@ -66,15 +67,19 @@ def _point(point: tuple[float, float]) -> list[float]:
 def _header(
     *,
     board_name: str,
-    ref_layer: str,
+    ref_layer: str | None,
     nets: Iterable[str],
     k: float,
     signal_layer: str | None = None,
+    planes: Sequence[str] = (),
+    nets_reason: str | None = None,
 ) -> str:
-    header = (
-        f"Board: {board_name} | Reference layer: {ref_layer} | "
-        f"Nets: {', '.join(sorted(nets))} | k: {k:g}"
-    )
+    nets = sorted(nets)
+    # ref_layer None: the planes were found automatically (check's auto mode).
+    reference = ref_layer if ref_layer is not None else f"auto ({', '.join(planes) or 'none'})"
+    # nets_reason set: the nets were chosen automatically; say how many and why.
+    net_text = f"{len(nets)} ({nets_reason})" if nets_reason else ", ".join(nets)
+    header = f"Board: {board_name} | Reference layer: {reference} | Nets: {net_text} | k: {k:g}"
     if signal_layer is not None:
         header += f" | Signal layer: {signal_layer}"
     return header
@@ -84,10 +89,12 @@ def to_text(
     violations: Iterable[Violation],
     *,
     board_name: str,
-    ref_layer: str,
+    ref_layer: str | None,
     nets: Iterable[str],
     k: float,
     signal_layer: str | None = None,
+    planes: Sequence[str] = (),
+    nets_reason: str | None = None,
 ) -> str:
     items = list(violations)
     lines = [
@@ -97,6 +104,8 @@ def to_text(
             nets=nets,
             k=k,
             signal_layer=signal_layer,
+            planes=planes,
+            nets_reason=nets_reason,
         )
     ]
     if not items:
@@ -104,8 +113,10 @@ def to_text(
     for item in ordered(items):
         sx, sy = item.start
         ex, ey = item.end
+        # With automatic references each line names its plane.
+        ref = f" ref={item.ref_layer or 'none'}" if ref_layer is None else ""
         lines.append(
-            f"{item.severity.upper()} {item.kind} net={item.net} layer={item.layer} "
+            f"{item.severity.upper()} {item.kind} net={item.net} layer={item.layer}{ref} "
             f"{item.length:.2f} mm ({sx:.2f}, {sy:.2f}) -> ({ex:.2f}, {ey:.2f})"
         )
     lines.append(summary_line(summarize(items)))
@@ -116,17 +127,21 @@ def to_dict(
     violations: Iterable[Violation],
     *,
     board_name: str,
-    ref_layer: str,
+    ref_layer: str | None,
     nets: Iterable[str],
     k: float,
     signal_layer: str | None = None,
+    planes: Sequence[str] = (),
+    nets_reason: str | None = None,
 ) -> dict[str, Any]:
     items = list(violations)
     return {
         "board": board_name,
-        "ref_layer": ref_layer,
+        "ref_layer": ref_layer,  # null: planes found automatically
+        "reference_planes": list(planes) if ref_layer is None else [ref_layer],
         "signal_layer": signal_layer,  # null: every layer was checked
         "nets": sorted(nets),
+        "net_selection": nets_reason,  # null: given with --nets
         "k": round(k, 4),
         "summary": summarize(items),
         "failed": failed(items),
@@ -134,6 +149,7 @@ def to_dict(
             {
                 "net": item.net,
                 "layer": item.layer,
+                "ref_layer": item.ref_layer,
                 "kind": item.kind,
                 "severity": item.severity,
                 "start": _point(item.start),
@@ -149,10 +165,12 @@ def to_json(
     violations: Iterable[Violation],
     *,
     board_name: str,
-    ref_layer: str,
+    ref_layer: str | None,
     nets: Iterable[str],
     k: float,
     signal_layer: str | None = None,
+    planes: Sequence[str] = (),
+    nets_reason: str | None = None,
 ) -> str:
     return json.dumps(
         to_dict(
@@ -162,6 +180,8 @@ def to_json(
             nets=nets,
             k=k,
             signal_layer=signal_layer,
+            planes=planes,
+            nets_reason=nets_reason,
         ),
         indent=2,
     ) + "\n"
@@ -174,6 +194,7 @@ def plot(
     nets: Iterable[str],
     ref_layer: str,
     signal_layer: str | None = None,
+    trace_layers: Collection[str] | None = None,
 ) -> Figure:
     """Plot checked traces, reference-layer copper, and violation spans."""
     items = ordered(violations)
@@ -200,6 +221,7 @@ def plot(
         for segment in board.segments
         if segment.net in checked_nets
         and (signal_layer is None or segment.layer == signal_layer)
+        and (trace_layers is None or segment.layer in trace_layers)
     ]
     for segment in traces:
         ax.plot(

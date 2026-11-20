@@ -210,7 +210,9 @@ def test_dict_violations_are_ordered_with_all_fields(results):
     items = dict_for(results, "split_crossed")["violations"]
 
     assert [item["kind"] for item in items] == ["split", "pad_clearance", "pad_clearance"]
-    assert set(items[0]) == {"net", "layer", "kind", "severity", "start", "end", "length"}
+    assert set(items[0]) == {
+        "net", "layer", "ref_layer", "kind", "severity", "start", "end", "length",
+    }
 
 
 def test_dict_numbers_are_rounded_to_4_decimals(results):
@@ -307,8 +309,8 @@ def test_plot_draws_one_line_per_span_in_its_colour(boards, results):
 
 
 def test_colours_tell_the_kinds_apart():
-    assert set(COLORS) == {"split", "edge_overhang", "pad_clearance"}
-    assert len({to_rgba(c) for c in COLORS.values()}) == 3
+    assert set(COLORS) == {"split", "edge_overhang", "pad_clearance", "no_reference"}
+    assert len({to_rgba(c) for c in COLORS.values()}) == 4
 
 
 def test_spans_are_drawn_on_top_of_the_trace(boards, results):
@@ -480,3 +482,66 @@ def test_plot_draws_only_traces_on_the_signal_layer():
     assert len(lines_with(every, "trace")) == 2
     (trace,) = lines_with(front, "trace")
     assert trace.get_ydata() == pytest.approx([0.0, 0.0])
+
+
+# ---- automatic references: header, ref= per line, JSON fields ----
+
+AUTO_SPLIT = Violation("SIG", "F.Cu", "split", "error", (5.0, 0.0), (6.8, 0.0), 1.8, "In1.Cu")
+NO_REF = Violation("SIG", "B.Cu", "no_reference", "error", (0.0, 3.0), (16.0, 3.0), 16.0, None)
+AUTO = {"board_name": "b", "ref_layer": None, "nets": ["SIG"], "k": 3.0, "planes": ["In1.Cu"]}
+
+
+def test_auto_header_names_the_planes():
+    text = to_text([], **AUTO)
+
+    assert text.splitlines()[0].startswith("Board: b | Reference layer: auto (In1.Cu) |")
+
+
+def test_auto_lines_name_their_reference():
+    lines = violation_lines(to_text([AUTO_SPLIT, NO_REF], **AUTO))
+
+    assert lines == [
+        "ERROR no_reference net=SIG layer=B.Cu ref=none 16.00 mm (0.00, 3.00) -> (16.00, 3.00)",
+        "ERROR split net=SIG layer=F.Cu ref=In1.Cu 1.80 mm (5.00, 0.00) -> (6.80, 0.00)",
+    ]
+
+
+def test_given_reference_lines_stay_as_before(results):
+    assert "ref=" not in text_for(results, "split_crossed")
+
+
+def test_chosen_nets_show_a_count_and_the_reason():
+    text = to_text([], **{**AUTO, "nets": ["B", "A"], "nets_reason": "net classes: 90ohm: 2"})
+
+    assert "| Nets: 2 (net classes: 90ohm: 2) |" in text
+
+
+def test_auto_dict_fields():
+    data = to_dict([AUTO_SPLIT], **{**AUTO, "nets_reason": "pair names, no net classes"})
+
+    assert data["ref_layer"] is None
+    assert data["reference_planes"] == ["In1.Cu"]
+    assert data["net_selection"] == "pair names, no net classes"
+    assert data["violations"][0]["ref_layer"] == "In1.Cu"
+
+
+def test_given_reference_dict_fields(results):
+    data = dict_for(results, "split_crossed")
+
+    assert data["reference_planes"] == ["In1.Cu"]
+    assert data["net_selection"] is None
+
+
+def test_plot_trace_layers_keeps_only_those_layers():
+    board = Board(
+        segments=[
+            Segment((2.0, 0.0), (18.0, 0.0), 0.2, "F.Cu", "SIG"),
+            Segment((2.0, 3.0), (18.0, 3.0), 0.2, "B.Cu", "SIG"),
+        ],
+        fills={("GND", "In1.Cu"): MultiPolygon([box(0, -5, 20, 5)])},
+        stackup=parse(STACKUP_2L),
+    )
+    ax = plot(board, [], nets=["SIG"], ref_layer="In1.Cu", trace_layers=["B.Cu"]).axes[0]
+    (trace,) = lines_with(ax, "trace")
+
+    assert trace.get_ydata() == pytest.approx([3.0, 3.0])

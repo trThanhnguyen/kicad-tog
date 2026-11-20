@@ -26,3 +26,4 @@ Line ending: forced text line ending = LF
 ### 2026-11-19
 - P5 report.py: text, JSON and PNG output. The figure tests read pixels, because a label box was hiding the very span it labelled.
 - cli.py: exit codes 0/1/2. A misspelled net is an error (exit 2), not a pass.
+- P6 CI: GitHub Actions runs pytest, then the checker on all three fixtures. split_crossed must exit exactly 1, so a crash (exit 2) can’t pass as a detection. The PNG and JSON reports are uploaded on every run, even a failing one.

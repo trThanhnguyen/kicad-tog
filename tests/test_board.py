@@ -240,3 +240,44 @@ def test_fixture_fills_are_valid(boards):
     for board in boards.values():
         for fill in board.fills.values():
             assert fill.is_valid
+
+
+# ---- board outline (Edge.Cuts bounding box), copper order, area ----
+
+def test_fixture_outline_is_the_edge_cuts_bounding_box(boards):
+    # The fixtures' outline is 30 x 20 mm with rounded corners (gr_line + gr_arc).
+    assert boards["edge_overhang"].outline == pytest.approx((111.0, 79.0, 141.0, 99.0))
+    assert boards["edge_overhang"].area() == pytest.approx(600.0)
+
+
+def test_outline_reads_lines_arcs_rects_circles_and_polys():
+    tree = parse("""(kicad_pcb
+        (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts"))
+        (gr_arc (start 10 0) (mid 12 2) (end 10 4) (layer "Edge.Cuts"))
+        (gr_rect (start -1 -2) (end 3 3) (layer "Edge.Cuts"))
+        (gr_circle (center 5 10) (end 5 12) (layer "Edge.Cuts"))
+        (gr_poly (pts (xy 0 0) (xy 4 -5) (xy 8 0)) (layer "Edge.Cuts"))
+        (gr_line (start -50 -50) (end 50 50) (layer "F.SilkS")))""")
+
+    # x: rect -1 .. arc mid 12; y: poly -5 .. circle 10 + 2. Silkscreen ignored.
+    assert Board.from_s_expression(tree).outline == pytest.approx((-1.0, -5.0, 12.0, 12.0))
+
+
+def test_board_without_edge_cuts_uses_the_fills_for_its_area():
+    tree = parse("""(kicad_pcb
+        (zone (net "GND") (layer "In1.Cu")
+            (filled_polygon (layer "In1.Cu") (pts (xy 0 0) (xy 4 0) (xy 4 5) (xy 0 5)))))""")
+    board = Board.from_s_expression(tree)
+
+    assert board.outline is None
+    assert board.area() == pytest.approx(20.0)
+
+
+def test_copper_layers_follow_the_stackup_order():
+    board = Board(segments=[], fills={}, stackup=parse(STACKUP_4L))
+
+    assert board.copper_layers() == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+
+
+def test_copper_layers_of_a_board_without_stackup_is_empty():
+    assert Board(segments=[], fills={}, stackup=[]).copper_layers() == []

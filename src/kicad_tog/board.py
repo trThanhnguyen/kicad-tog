@@ -130,11 +130,53 @@ def dielectric_height(stackup: list, layer_a: str, layer_b: str) -> float:
     return height
 
 
+Bounds = tuple[float, float, float, float]  # (min_x, min_y, max_x, max_y)
+
+_OUTLINE_SHAPES = ("gr_line", "gr_arc", "gr_rect", "gr_circle", "gr_poly")
+
+
+def _point(node: list) -> tuple[float, float]:
+    return (float(node[1]), float(node[2]))
+
+
+def outline_bounds(tree: list) -> Bounds | None:
+    """Bounding box of the board outline (board-level shapes on Edge.Cuts).
+
+    A bounding box, not the outline polygon: notches and rounded corners count
+    as board area. Good enough for the 50 % plane-coverage rule; tracing the
+    real outline is a listed limit. Arcs contribute their start, mid and end.
+    """
+    points: list[tuple[float, float]] = []
+    for node in tree[1:]:
+        if not isinstance(node, list) or not node or node[0] not in _OUTLINE_SHAPES:
+            continue
+        layer_node = child(node, "layer")
+        if layer_node is None or layer_node[1] != "Edge.Cuts":
+            continue
+
+        if node[0] == "gr_circle":
+            cx, cy = _point(_required_child(node, "center"))
+            ex, ey = _point(_required_child(node, "end"))
+            r = ((ex - cx) ** 2 + (ey - cy) ** 2) ** 0.5
+            points += [(cx - r, cy - r), (cx + r, cy + r)]
+        elif node[0] == "gr_poly":
+            points += [_point(xy) for xy in children(_required_child(node, "pts"), "xy")]
+        else:
+            points += [_point(n) for tag in ("start", "mid", "end") if (n := child(node, tag))]
+
+    if not points:
+        return None
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 @dataclass
 class Board:
     segments: list[Segment]
     fills: dict[tuple[str, str], MultiPolygon]
     stackup: list
+    outline: Bounds | None = None
 
     @classmethod
     def from_s_expression(cls, tree: list) -> "Board":
@@ -189,7 +231,12 @@ class Board:
         if stackup is None:
             stackup = []
 
-        return cls(segments=segments, fills=fills, stackup=stackup)
+        return cls(
+            segments=segments,
+            fills=fills,
+            stackup=stackup,
+            outline=outline_bounds(tree),
+        )
 
     @classmethod
     def load(cls, path: str | Path) -> "Board":
@@ -200,3 +247,28 @@ class Board:
     def h(self, signal_layer: str, ref_layer: str) -> float:
         """Return dielectric height between a signal layer and its reference."""
         return dielectric_height(self.stackup, signal_layer, ref_layer)
+
+    def copper_layers(self) -> list[str]:
+        """Copper layer names in stackup order, top to bottom."""
+        return [
+            layer[1]
+            for layer in children(self.stackup, "layer")
+            if len(layer) > 1
+            and (type_node := child(layer, "type")) is not None
+            and type_node[1] == "copper"
+        ]
+
+    def area(self) -> float:
+        """Board area for the plane-coverage rule (mm²).
+
+        The outline's bounding box; without an outline, the bounding box of all
+        filled copper, so a board with no Edge.Cuts still gets a number.
+        """
+        bounds = self.outline
+        if bounds is None:
+            fills = [fill for fill in self.fills.values() if not fill.is_empty]
+            if not fills:
+                return 0.0
+            bounds = unary_union(fills).bounds
+        min_x, min_y, max_x, max_y = bounds
+        return (max_x - min_x) * (max_y - min_y)

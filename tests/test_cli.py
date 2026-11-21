@@ -38,6 +38,16 @@ def run(name: str, *extra: str) -> int:
     return main([board_path(name), "--nets", "SIG", "--ref", "In1.Cu", *extra])
 
 
+@pytest.fixture(autouse=True)
+def work_dir(tmp_path_factory, monkeypatch) -> Path:
+    # Every run writes out/ under the working directory. Run each test in its
+    # own temporary folder, apart from tmp_path, so the repo's out/ stays
+    # untouched and tests that list tmp_path see only their own files.
+    cwd = tmp_path_factory.mktemp("cwd")
+    monkeypatch.chdir(cwd)
+    return cwd
+
+
 # --- argument parsing ------------------------------------------------------
 
 
@@ -153,10 +163,30 @@ def test_files_are_written_even_when_the_check_fails(tmp_path):
     assert js.exists() and png.exists()
 
 
-def test_no_files_without_the_flags(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+def test_files_go_to_out_by_default(work_dir):
+    assert not (work_dir / "out").exists()  # created when missing
     run("split_crossed")
-    assert list(tmp_path.iterdir()) == []
+    assert sorted(p.name for p in (work_dir / "out").iterdir()) == [
+        "split_crossed.json",
+        "split_crossed.png",
+    ]
+
+
+def test_auto_default_png_is_one_file_per_plane(work_dir):
+    main([board_path("split_crossed"), "--nets", "SIG"])
+    assert (work_dir / "out" / "split_crossed_In1.Cu.png").exists()
+
+
+def test_a_given_path_replaces_only_its_own_default(tmp_path, work_dir):
+    run("split_crossed", "--json", str(tmp_path / "r.json"))
+    assert (tmp_path / "r.json").exists()
+    assert sorted(p.name for p in (work_dir / "out").iterdir()) == ["split_crossed.png"]
+
+
+def test_missing_folders_of_a_given_path_are_created(tmp_path):
+    target = tmp_path / "a" / "b" / "r.json"
+    run("split_crossed", "--json", str(target))
+    assert target.exists()
 
 
 def test_png_is_not_cropped(tmp_path):
@@ -218,25 +248,27 @@ def test_one_unknown_net_among_good_ones(capsys):
 
 
 def test_unwritable_output_path(tmp_path, capsys):
-    target = tmp_path / "no_such_dir" / "r.json"
+    # A missing folder is created, but not when a file sits where it should be.
+    (tmp_path / "a_file").write_text("", encoding="utf-8")
+    target = tmp_path / "a_file" / "r.json"
     assert run("split_crossed", "--json", str(target)) == 2
     _, err = capsys.readouterr()
     assert "Traceback" not in err
-    assert "r.json" in err
+    assert "a_file" in err
 
 
 # --- the real process, as CI will run it -----------------------------------
 
 
 @pytest.mark.parametrize(("name", "code"), [("continuous", 0), ("split_crossed", 1)])
-def test_python_dash_m(name, code):
+def test_python_dash_m(name, code, work_dir):
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
     result = subprocess.run(
         [sys.executable, "-m", "kicad_tog", board_path(name), "--nets", "SIG", "--ref", "In1.Cu"],
         capture_output=True,
         text=True,
         env=env,
-        cwd=ROOT,
+        cwd=work_dir,  # not ROOT: the run writes out/ there
     )
     assert result.returncode == code
     assert result.stdout.startswith("Board: ")

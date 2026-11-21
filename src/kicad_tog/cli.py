@@ -56,11 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
         "-k", "--k", type=_positive_float, default=3.0,
         help="return-current margin factor (default: 3.0)",
     )
-    parser.add_argument("--json", type=Path, help="write a JSON report")
+    parser.add_argument(
+        "--json", type=Path,
+        help="where to write the JSON report (default: out/<board>.json)",
+    )
     parser.add_argument(
         "--png", type=Path,
-        help="write a plot as PNG (automatic references: one file per plane, "
-        "out.png -> out_In1.Cu.png, ...)",
+        help="where to write the plot (default: out/<board>.png; automatic "
+        "references: one file per plane, out.png -> out_In1.Cu.png, ...)",
     )
     return parser
 
@@ -72,6 +75,11 @@ def plane_png(path: Path, plane: str) -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Reports are always written: to out/ under the working directory unless
+    # given. Not next to the board: KiCad's demos sit in read-only Program Files.
+    json_path = args.json or Path("out") / f"{args.board.stem}.json"
+    png_path = args.png or Path("out") / f"{args.board.stem}.png"
 
     try:
         board = Board.load(args.board)
@@ -111,25 +119,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         report = to_text(violations, **meta)
 
-        if args.json is not None:
-            args.json.write_text(to_json(violations, **meta), encoding="utf-8")
+        # A missing folder is created; one that can't be (a file in the way,
+        # no permission) is an OSError: exit 2 below.
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(to_json(violations, **meta), encoding="utf-8")
 
-        if args.png is not None:
-            if args.ref is not None:
-                figure = plot(
-                    board, violations, nets=nets, ref_layer=args.ref, signal_layer=args.layer
-                )
-                figure.savefig(args.png, dpi=150, bbox_inches="tight")
-            for plane, layers in planes.items():
-                figure = plot(
-                    board,
-                    [v for v in violations if v.ref_layer == plane],
-                    nets=nets,
-                    ref_layer=plane,
-                    signal_layer=args.layer,
-                    trace_layers=layers,
-                )
-                figure.savefig(plane_png(args.png, plane), dpi=150, bbox_inches="tight")
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        if args.ref is not None:
+            figure = plot(
+                board, violations, nets=nets, ref_layer=args.ref, signal_layer=args.layer
+            )
+            figure.savefig(png_path, dpi=150, bbox_inches="tight")
+        for plane, layers in planes.items():
+            figure = plot(
+                board,
+                [v for v in violations if v.ref_layer == plane],
+                nets=nets,
+                ref_layer=plane,
+                signal_layer=args.layer,
+                trace_layers=layers,
+            )
+            figure.savefig(plane_png(png_path, plane), dpi=150, bbox_inches="tight")
 
     except (OSError, ValueError) as exc:
         # Bad input, not a failed check: exit 2, one line, no traceback.

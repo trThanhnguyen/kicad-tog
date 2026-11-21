@@ -75,7 +75,7 @@ pixi run tog fixtures/split_crossed.kicad_pcb --nets SIG --ref In1.Cu   # manual
 | `--ref` | Check every trace against this one copper layer. Default: the nearest plane above and below each trace |
 | `--layer` | Check only traces on this signal layer |
 | `-k` | Margin factor, default 3 |
-| `--json`, `--png` | Write a JSON report / a figure. In automatic mode, one figure per plane: `out.png` → `out_In1.Cu.png`, ... |
+| `--json`, `--png` | Where to write the JSON report / the figure. Default: `out/<board>.json` and `out/<board>.png` in the current folder, created if missing. In automatic mode, one figure per plane: `out.png` → `out_In1.Cu.png`, ... |
 
 **Exit codes:** `0` no errors (warnings and info allowed), `1` at least one error, `2` the
 check could not run (unreadable file, unknown net or layer, no nets selected, no stackup).

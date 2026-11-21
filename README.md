@@ -94,8 +94,7 @@ run with `MSYS_NO_PATHCONV=1` or from PowerShell.
 2. **Pick the nets**, in this order:
    1. `--nets`, if given.
    2. Every net in a net class other than `Default`, from the `.kicad_pro` next to the
-      board: the class patterns and the per-net assignments. Schematic netclass labels
-      end up in the assignments, so both ways of assigning a class are covered.
+      board: the class patterns and the per-net assignments.
    3. Differential-pair names (`_P`/`_N`, `+`/`-`) when the project has no classes.
    4. Nothing found: exit 2. The report header says which rule picked the nets.
 3. **Find the reference planes.** A *plane* is a copper layer whose fills (any net)
@@ -111,8 +110,8 @@ run with `MSYS_NO_PATHCONV=1` or from PowerShell.
    keeps about 80% of the high-frequency return current (J(x) ∝ 1/(1+(x/h)²)) over
    copper. Smaller k misses traces that hug plane edges; larger k flags most traces near
    pour boundaries.
-   Each segment only gets the copper near it (an STRtree lookup, clipped to the
-   segment's bounds ± 2r); a test checks that the results match the full-board version.
+   Each segment only gets the copper near it; a test checks that the results match
+   the full-board version.
 5. **Filter** out slivers shorter than 0.05 mm (numerical noise).
 6. **Classify** each uncovered span:
 
@@ -155,9 +154,7 @@ trace's ±3h return band lies over the slot.
   In automatic mode, `edge_overhang`'s pour covers 43.6% of the board, so it is not a
   plane and the trace is reported as `no_reference`. A test pins this behaviour.
 
-  Planned next: `near_split` (the plane edge runs alongside the trace, closer than k·h)
-  and `pair_one_member` (only one trace of a differential pair crosses a gap).
-- **Unit tests:** pytest, test-first for the parser, loader, geometry, report and CLI.
+- **Unit tests:** pytest for the parser, loader, geometry, report and CLI.
 - **CI:** GitHub Actions runs the tests on every push, then runs the checker on the three
   fixtures. `continuous` and `edge_overhang` must exit 0 and `split_crossed` exactly 1,
   so a crash (exit 2) can't pass as a detection. The text, JSON and PNG reports are
@@ -182,13 +179,7 @@ a verified list of defects: arc tracks are skipped and gaps under bends are misr
 - The project's pattern `/*PCIE*` also puts slow sideband lines (`PWR_EN`, `nRST`,
   `nWAKE`) into the 90 Ω class, so they are checked too.
 
-The real board exposed four problems the fixtures couldn't, all fixed: KiCad 9's
-numbered nets, nets that change layers through vias, speed (83 s for 4 nets before the
-per-segment copper window, 7 s for 14 nets after), and KiCad's "keyhole" fill outlines, which
-are invalid polygons and produced false splits until `make_valid`.
-
-Board: CM5 MINIMA REV3, from KiCad's demos, licensed CERN-OHL-S-2.0. Only the figure is
-in this repo, not the board.
+Board: CM5 MINIMA REV3, from KiCad's demos, licensed CERN-OHL-S-2.0.
 
 ## Limits
 
@@ -205,4 +196,3 @@ in this repo, not the board.
 - The check uses the fills saved in the file: refill and save first.
 - Automatic mode needs the board's stackup; without one it exits 2.
 - Net selection trusts the project's net classes, broad patterns included.
-- KiCad's next major release adds a native return-path rule; this is not a new idea.

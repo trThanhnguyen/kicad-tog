@@ -64,8 +64,8 @@ KiCad itself is not needed.
 pixi install
 pixi run test                                   # pytest
 
-pixi run tog board.kicad_pcb                    # nets and planes found automatically
-pixi run tog board.kicad_pcb --nets "/*USB*" --json out/usb.json --png out/usb.png
+pixi run tog path/to/your_board.kicad_pcb   # nets and planes found automatically
+pixi run tog path/to/your_board.kicad_pcb --nets "/*USB*" --json out/usb.json --png out/usb.png
 pixi run tog fixtures/split_crossed.kicad_pcb --nets SIG --ref In1.Cu   # manual mode, as in CI
 ```
 

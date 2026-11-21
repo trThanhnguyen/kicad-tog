@@ -5,7 +5,7 @@ pixi.lock merge=binary linguist-language=YAML linguist-generated=true -diff
 * text=auto eol=lf
 
 # 2. (Optional) Explicitly mark common binary files so Git never touches them
-# *.png binary
+*.png binary
 # *.gif binary
 # *.pdf binary
 

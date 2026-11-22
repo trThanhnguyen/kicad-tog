@@ -171,10 +171,10 @@ def test_split_crossed_slot_is_8_square_mm(boards):
     assert solid.area - gnd.area == pytest.approx(8.0, abs=0.01)
 
 
-def test_edge_overhang_plane_stops_at_126(boards):
+def test_edge_overhang_plane_stops_at_129(boards):
     gnd = boards["edge_overhang"].fills[("GND", "In1.Cu")]
 
-    assert gnd.bounds[2] == pytest.approx(126.0)
+    assert gnd.bounds[2] == pytest.approx(129.0)
     assert gnd.contains(Point(120, 88))
     assert not gnd.contains(Point(130, 88))
 

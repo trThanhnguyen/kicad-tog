@@ -161,9 +161,9 @@ def test_edge_overhang_finds_the_plane_edge(boards):
 
     assert kinds(result) == ["edge_overhang", "pad_clearance"]
     assert overhang.severity == "warning"
-    assert overhang.start == pytest.approx((125.6, 88.0), abs=0.01)
+    assert overhang.start == pytest.approx((128.6, 88.0), abs=0.01)
     assert overhang.end == pytest.approx((139.185, 88.0), abs=0.01)
-    assert overhang.length == pytest.approx(13.585, abs=0.01)
+    assert overhang.length == pytest.approx(10.585, abs=0.01)
 
 
 def test_k_sets_the_margin(boards):

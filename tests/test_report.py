@@ -370,7 +370,7 @@ def test_legend_never_covers_the_board(boards, results):
     ("name", "empty_point"),
     [
         ("split_crossed", (125.0, 92.0)),   # inside the slot (x 124.5-125.5, y 85-93)
-        ("edge_overhang", (133.0, 92.0)),   # past the plane's edge at x = 126
+        ("edge_overhang", (133.0, 92.0)),   # past the plane's edge at x = 129
     ],
 )
 def test_missing_copper_stays_empty(boards, results, name, empty_point):

@@ -149,10 +149,10 @@ trace's ±3h return band lies over the slot.
   |---|---|---|
   | `continuous` | Solid under the whole trace | 0 errors, 2 `pad_clearance` info; exit 0 |
   | `split_crossed` | Slotted: an 8 mm × 1 mm slot crosses under the trace; the plane stays one piece | 1 split, 1.80 mm (error), 2 info; exit 1 |
-  | `edge_overhang` | Cut short: the plane ends about 13 mm before J2 (J2's ground reaches J1 through a B.Cu trace) | 1 edge overhang, 13.6 mm (warning), 1 info; exit 0 |
+  | `edge_overhang` | Cut short: the plane ends about 10 mm before J2 (J2's ground reaches J1 through a B.Cu trace) | 1 edge overhang, 10.6 mm (warning), 1 info; exit 0 |
 
-  In automatic mode, `edge_overhang`'s pour covers 43.6% of the board, so it is not a
-  plane and the trace is reported as `no_reference`. A test pins this behaviour.
+  In automatic mode, `edge_overhang`'s pour covers 53% of the board, so In1.Cu counts as
+  a plane and the result is the same as with `--ref In1.Cu`.
 
 - **Unit tests:** pytest for the parser, loader, geometry, report and CLI.
 - **CI:** GitHub Actions runs the tests on every push, then runs the checker on the three

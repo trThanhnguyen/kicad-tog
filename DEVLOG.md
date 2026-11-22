@@ -39,3 +39,6 @@ Line ending: forced text line ending = LF
 - Nets: --nets (names or wildcards), else non-Default net classes from the .kicad_pro (patterns + assignments; schematic directive labels end up there), else _P/_N pair names, else exit 2.
 - CM5 with no flags: 40 nets from net classes, planes In1/In3/In4, one PNG per plane, 10 s.
 - Current known limits: arc tracks are skipped; a gap under a bend is misread as two pad_clearance infos; edge_overhang's 44% In1 pour is not a plane in auto mode.
+
+### 2026-11-22
+- edge_overhang fixture: In1 pour extended from x = 126 to 129 (44% → 53% of the board), so auto mode finds it as a plane and gives the same overhang warning as --ref In1.Cu (13.6 → 10.6 mm).

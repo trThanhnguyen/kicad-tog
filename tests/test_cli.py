@@ -350,11 +350,14 @@ def test_auto_reference_on_the_fixtures(name, code, capsys):
     assert "ref=In1.Cu" in out
 
 
-def test_half_plane_is_not_a_plane(capsys):
-    # edge_overhang's In1 pour covers 44 % of the board: no plane, so the trace
-    # has no reference at all (with --ref In1.Cu it is an overhang warning).
-    assert main([board_path("edge_overhang"), "--nets", "SIG"]) == 1
-    assert "ERROR no_reference net=SIG" in capsys.readouterr().out
+def test_edge_overhang_auto_matches_manual(capsys):
+    # edge_overhang's In1 pour covers 53 % of the board, so it is a plane:
+    # automatic mode gives the same overhang warning as --ref In1.Cu.
+    # The 50 % rule itself: test_check.py, test_a_plane_covers_at_least_half_the_board.
+    assert main([board_path("edge_overhang"), "--nets", "SIG"]) == 0
+    out = capsys.readouterr().out
+    assert "Reference layer: auto (In1.Cu)" in out
+    assert "WARNING edge_overhang net=SIG layer=F.Cu ref=In1.Cu" in out
 
 
 def test_fixtures_have_no_net_classes_so_no_flags_exits_2(capsys):
